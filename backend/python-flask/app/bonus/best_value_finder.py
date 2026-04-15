@@ -94,7 +94,97 @@ class BestValueFinder:
         #    - matchCount: number of matches
         #    - message: description of result
 
-        raise NotImplementedError("Not implemented — this is a bonus challenge!")
+        if not all_matches:
+            return {
+                "withinBudget": False,
+                "matches": [],
+                "route": None,
+                "costBreakdown": {},
+                "countriesVisited": [],
+                "matchCount": 0,
+                "message": "No matches available"
+            }
+
+        # 1. First, ensure country coverage
+        matches_by_country = self.get_matches_by_country(all_matches)
+
+        selected_matches = []
+
+        for country in self.REQUIRED_COUNTRIES:
+            country_matches = matches_by_country.get(country, [])
+            if not country_matches:
+                return {
+                    "withinBudget": False,
+                    "matches": [],
+                    "route": None,
+                    "costBreakdown": {},
+                    "countriesVisited": [],
+                    "matchCount": 0,
+                    "message": f"No matches available in {country}"
+                }
+
+            cheapest = min(country_matches, key=lambda m: m['ticketPrice'])
+            selected_matches.append(cheapest)
+
+        # 2. Sort remaining matches by "value" (cheapest first)
+        remaining_matches = [
+            m for m in all_matches if m not in selected_matches
+        ]
+        remaining_matches.sort(key=lambda m: m['ticketPrice'])
+
+        # 3. Greedily add matches while staying within budget
+        for candidate in remaining_matches:
+            temp_selection = selected_matches + [candidate]
+
+            total_cost = self.calculate_trip_cost(
+                temp_selection,
+                origin_city_id,
+                flight_prices
+            )
+
+            if total_cost <= budget:
+                selected_matches.append(candidate)
+
+        # 4. Ensure minimum 5 matches
+        if len(selected_matches) < 5:
+            return {
+                "withinBudget": False,
+                "matches": selected_matches,
+                "route": None,
+                "costBreakdown": {},
+                "countriesVisited": list(set(m['city']['country'] for m in selected_matches)),
+                "matchCount": len(selected_matches),
+                "message": "Unable to select at least 5 matches within budget"
+            }
+
+        # 5. Build the optimised route using NearestNeighbour
+        from app.strategies.nearest_neighbour_strategy import NearestNeighbourStrategy
+
+        strategy = NearestNeighbourStrategy()
+        route = strategy.optimise(selected_matches)
+
+        # Calculate final cost
+        total_cost = self.calculate_trip_cost(
+            selected_matches,
+            origin_city_id,
+            flight_prices
+        )
+
+        # Build cost breakdown (simple version)
+        cost_breakdown = {
+            "total": total_cost
+        }
+
+        # 6. Return BestValueResult
+        return {
+            "withinBudget": total_cost <= budget,
+            "matches": selected_matches,
+            "route": route,
+            "costBreakdown": cost_breakdown,
+            "countriesVisited": list(set(m['city']['country'] for m in selected_matches)),
+            "matchCount": len(selected_matches),
+            "message": "Optimal match combination found within budget"
+        }
 
     # ============================================================
     # HELPER METHODS (Already implemented for you)
