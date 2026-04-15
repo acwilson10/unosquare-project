@@ -83,71 +83,103 @@ class CostCalculator:
         #
         # 8. Return BudgetResult with all results
 
-        raise NotImplementedError("Not implemented — this is your task!")
+        if not matches:
+            return {
+                "feasible": False,
+                "totalCost": 0,
+                "breakdown": {},
+                "missingCountries": self.REQUIRED_COUNTRIES,
+                "suggestions": ["No matches selected"]
+            }
 
-    # ============================================================
-    # HELPER METHODS (Already implemented for you)
-    # ============================================================
+        # Ensure matches are sorted by date
+        matches = sorted(matches, key=lambda m: m['kickoff'])
 
-    def get_flight_price(
-        self,
-        from_city_id: str,
-        to_city_id: str,
-        flight_prices: list
-    ) -> float:
-        """
-        Look up the flight price between two cities.
-        Returns an estimated price if no direct flight exists.
-        """
-        if from_city_id == to_city_id:
-            return 0
+        # 1. Calculate ticket costs:
+        #    - Sum of match['ticketPrice'] for all matches
+        ticket_cost = sum(match['ticketPrice'] for match in matches)
 
-        for fp in flight_prices:
-            if fp['from_city_id'] == from_city_id and fp['to_city_id'] == to_city_id:
-                return fp['price']
+        # 2. Calculate flight costs:
+        #    - From origin_city_id to first match's city
+        #    - Between each consecutive match city (if different)
+        #    - Use get_flight_price() helper to look up prices
+        flight_cost = 0
 
-        # If no direct flight, estimate based on average
-        if flight_prices:
-            avg_price = sum(fp['price'] for fp in flight_prices) / len(flight_prices)
-            return avg_price * 1.2  # 20% markup for indirect routes
-        return 300 * 1.2
+        first_city_id = matches[0]['city']['id']
+        flight_cost += self.get_flight_price(origin_city_id, first_city_id, flight_prices)
 
-    def calculate_nights_between(self, date1: str, date2: str) -> int:
-        """Calculate the number of nights between two dates."""
-        d1 = datetime.fromisoformat(date1.split('T')[0])
-        d2 = datetime.fromisoformat(date2.split('T')[0])
-        return max(0, (d2 - d1).days)
+        for i in range(len(matches) - 1):
+            current_city = matches[i]['city']['id']
+            next_city = matches[i + 1]['city']['id']
+            flight_cost += self.get_flight_price(current_city, next_city, flight_prices)
 
-    def get_countries_visited(self, matches: list) -> list:
-        """Get list of unique countries visited from matches."""
-        countries = set()
-        for match in matches:
-            countries.add(match['city']['country'])
-        return list(countries)
+        # 3. Calculate accommodation costs:
+        #    - For each city visited, calculate nights stayed
+        #    - Use calculate_nights_between() for dates
+        #    - Multiply nights by city's accommodationPerNight
+        accommodation_cost = 0
 
-    def get_missing_countries(self, countries_visited: list) -> list:
-        """Check which required countries (USA, Mexico, Canada) are missing."""
-        return [c for c in self.REQUIRED_COUNTRIES if c not in countries_visited]
+        for i in range(len(matches) - 1):
+            current_match = matches[i]
+            next_match = matches[i + 1]
 
-    def generate_suggestions(
-        self,
-        matches: list,
-        total: float,
-        budget: float
-    ) -> list:
-        """Generate cost-saving suggestions when budget is exceeded."""
-        suggestions = []
-        overage = total - budget
-
-        if len(matches) > 5:
-            most_expensive = max(matches, key=lambda m: m['ticketPrice'])
-            suggestions.append(
-                f"Consider removing the {most_expensive['homeTeam']['name']} vs "
-                f"{most_expensive['awayTeam']['name']} match to save ${most_expensive['ticketPrice']}"
+            nights = self.calculate_nights_between(
+                current_match['kickoff'],
+                next_match['kickoff']
             )
 
-        suggestions.append(
-            f"You are ${overage:.0f} over budget. Consider reducing the number of matches."
-        )
+            rate = current_match['city']['accommodationPerNight']
+            accommodation_cost += nights * rate
 
-        return suggestions
+        # 4. Build CostBreakdown with all costs and total
+        total_cost = ticket_cost + flight_cost + accommodation_cost
+
+        breakdown: CostBreakdown = {
+            "tickets": ticket_cost,
+            "flights": flight_cost,
+            "accommodation": accommodation_cost,
+            "total": total_cost
+        }
+
+        # 5. Check country constraint:
+        #    - Use get_countries_visited() and get_missing_countries()
+        #    - If missing countries, set feasible = False
+        countries_visited = self.get_countries_visited(matches)
+        missing_countries = self.get_missing_countries(countries_visited)
+
+        feasible = True
+        if missing_countries:
+            feasible = False
+
+        # 6. Check budget constraint:
+        #    - If total > budget, set feasible = False
+        #    - Set minimumBudgetRequired = total
+        minimum_budget_required: Optional[float] = None
+
+        if total_cost > budget:
+            feasible = False
+            minimum_budget_required = total_cost
+
+        # 7. Generate suggestions if not feasible:
+        #    - Use generate_suggestions() helper
+        suggestions = []
+        if not feasible:
+            suggestions = self.generate_suggestions(matches, total_cost, budget)
+
+        # 8. Return BudgetResult with all results
+        result: BudgetResult = {
+            "feasible": feasible,
+            "totalCost": total_cost,
+            "breakdown": breakdown
+        }
+
+        if minimum_budget_required:
+            result["minimumBudgetRequired"] = minimum_budget_required
+
+        if missing_countries:
+            result["missingCountries"] = missing_countries
+
+        if suggestions:
+            result["suggestions"] = suggestions
+
+        return result
